@@ -84,18 +84,73 @@ inputs:
 runs:
   using: composite
   steps:
-    - id: main
+    - id: config
       shell: bash
+      env:
+        INPUT_PROJECT_PATH: ${{ inputs.project_path }}
+        INPUT_CONFIG_FILE: ${{ inputs.config_file }}
+        INPUT_PYTHON_VERSION: ${{ inputs.python_version }}
       run: |
         set -euo pipefail
-        project_path="${INPUT_PROJECT_PATH:-${PIPERY_TEST_PROJECT_PATH:-.}}"
-        log_path="${PIPERY_LOG_PATH:-pipery.jsonl}"
-        if [ ! -d "$project_path" ]; then
-          echo "Expected project path to exist: $project_path" >&2
-          exit 1
+        project_path="${INPUT_PROJECT_PATH}"
+        config_file="${INPUT_CONFIG_FILE}"
+        if [[ "${config_file}" = /* ]]; then
+          config_path="${config_file}"
+        else
+          config_path="${project_path}/${config_file}"
         fi
-        printf '{"event":"build","status":"success","project_path":"%s"}\n' "$project_path" > "$log_path"
-        echo "Implement your action logic here for $project_path."
+        python3 -c 'import yaml' 2>/dev/null || pip install pyyaml -q
+        python3 - "${config_path}" "${INPUT_PYTHON_VERSION}" "${GITHUB_OUTPUT}" <<'PY'
+        import re
+        import sys
+
+        import yaml
+
+        config_path, input_version, output_path = sys.argv[1:]
+        version = input_version
+        try:
+            with open(config_path, encoding="utf-8") as config_file:
+                config = yaml.safe_load(config_file) or {}
+        except FileNotFoundError:
+            config = {}
+
+        config_version = config.get("python_version")
+        if input_version == "3.11" and isinstance(config_version, (str, int, float)):
+            version = str(config_version)
+        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,2}(?:[-+].*)?", version):
+            raise SystemExit(f"Invalid python_version: {version}")
+        with open(output_path, "a", encoding="utf-8") as output:
+            output.write(f"python_version={version}\n")
+        PY
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ steps.config.outputs.python_version }}
+    - id: main
+      shell: bash
+      env:
+        INPUT_PROJECT_PATH: ${{ inputs.project_path }}
+        INPUT_CONFIG_FILE: ${{ inputs.config_file }}
+        INPUT_PACKAGE_MANAGER: ${{ inputs.package_manager }}
+        INPUT_PYTHON_VERSION: ${{ inputs.python_version }}
+        INPUT_SKIP_SAST: ${{ inputs.skip_sast }}
+        INPUT_SKIP_SCA: ${{ inputs.skip_sca }}
+        INPUT_SKIP_LINT: ${{ inputs.skip_lint }}
+        INPUT_SKIP_BUILD: ${{ inputs.skip_build }}
+        INPUT_TESTS_PATH: ${{ inputs.tests_path }}
+        INPUT_SKIP_TEST: ${{ inputs.skip_test }}
+        INPUT_SKIP_VERSIONING: ${{ inputs.skip_versioning }}
+        INPUT_SKIP_PACKAGING: ${{ inputs.skip_packaging }}
+        INPUT_SKIP_RELEASE: ${{ inputs.skip_release }}
+        INPUT_SKIP_REINTEGRATION: ${{ inputs.skip_reintegration }}
+        INPUT_VERSION_BUMP: ${{ inputs.version_bump }}
+        INPUT_REGISTRY: ${{ inputs.registry }}
+        INPUT_PYPI_TOKEN: ${{ inputs.pypi_token }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github_token }}
+        INPUT_TARGET_BRANCH: ${{ inputs.target_branch }}
+        INPUT_LOG_FILE: ${{ inputs.log_file }}
+      run: |
+          set -euo pipefail
+          "$GITHUB_ACTION_PATH/src/main.sh"
 branding:
   icon: package
   color: blue
